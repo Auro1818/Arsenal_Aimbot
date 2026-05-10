@@ -1,13 +1,12 @@
 -- ============================================
--- 🧠 STEAL A BRAINROT - DELTA iOS SCRIPT v3.0
--- Anti-Cheat + Anti-TP Advanced Bypass
+-- 🧠 STEAL A BRAINROT - DELTA iOS SCRIPT v3.2
+-- Auto-Show Menu + Anti-Cheat + Anti-TP
 -- Loadstring Version
 -- ============================================
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
@@ -18,10 +17,10 @@ local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 -- ============================================
 
 local Settings = {
-    InstantSteal = false,
-    Speed = false,
-    MapESP = false,
-    BaseESP = false,
+    InstantSteal = true,
+    Speed = true,
+    MapESP = true,
+    BaseESP = true,
     SpeedValue = 16,
     DrawDistance = 999999,
 }
@@ -115,7 +114,7 @@ local function AdvancedTeleport(targetPos, smooth)
 end
 
 -- ============================================
--- 🎨 GUI SETUP
+-- 🎨 GUI SETUP - AUTO SHOW
 -- ============================================
 
 local ScreenGui = Instance.new("ScreenGui")
@@ -123,30 +122,14 @@ ScreenGui.Name = "StealABrainrotMenu"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
--- Toggle Button
-local ToggleButton = Instance.new("TextButton")
-ToggleButton.Name = "ToggleButton"
-ToggleButton.Size = UDim2.new(0, 50, 0, 50)
-ToggleButton.Position = UDim2.new(0, 10, 0, 10)
-ToggleButton.BackgroundColor3 = Color3.fromRGB(100, 100, 255)
-ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleButton.TextSize = 20
-ToggleButton.Font = Enum.Font.GothamBold
-ToggleButton.Text = "☰"
-ToggleButton.Parent = ScreenGui
-
-local ToggleCorner = Instance.new("UICorner")
-ToggleCorner.CornerRadius = UDim.new(0, 10)
-ToggleCorner.Parent = ToggleButton
-
--- Main Menu
+-- Main Menu (AUTO VISIBLE)
 local MenuFrame = Instance.new("Frame")
 MenuFrame.Name = "MenuFrame"
 MenuFrame.Size = UDim2.new(0, 280, 0, 280)
 MenuFrame.Position = UDim2.new(0.05, 0, 0.1, 0)
 MenuFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 MenuFrame.BorderSizePixel = 0
-MenuFrame.Visible = false
+MenuFrame.Visible = true -- AUTO SHOW
 MenuFrame.Parent = ScreenGui
 
 local MenuCorner = Instance.new("UICorner")
@@ -176,7 +159,7 @@ local function CreateButton(name, text, position)
     Button.Size = UDim2.new(0.9, 0, 0, 45)
     Button.Position = UDim2.new(0.05, 0, position, 0)
     Button.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-    Button.TextColor3 = Color3.fromRGB(180, 100, 255)
+    Button.TextColor3 = Color3.fromRGB(100, 255, 100)
     Button.TextSize = 14
     Button.Font = Enum.Font.Gotham
     Button.Text = text
@@ -189,7 +172,7 @@ local function CreateButton(name, text, position)
 end
 
 local InstantStealButton = CreateButton("InstantSteal", "Instant steal (ON)", 0.15)
-local SpeedButton = CreateButton("Speed", "Speed (Off)", 0.35)
+local SpeedButton = CreateButton("Speed", "Speed (On)", 0.35)
 local MapESPButton = CreateButton("MapESP", "Map ESP (ON)", 0.55)
 local BaseESPButton = CreateButton("BaseESP", "My Base ESP (ON)", 0.75)
 
@@ -207,32 +190,27 @@ DiscordLabel.Parent = MenuFrame
 -- 🔄 BUTTON EVENTS
 -- ============================================
 
-ToggleButton.MouseButton1Click:Connect(function()
-    MenuFrame.Visible = not MenuFrame.Visible
-    ToggleButton.BackgroundColor3 = MenuFrame.Visible and Color3.fromRGB(100, 200, 100) or Color3.fromRGB(100, 100, 255)
-end)
-
 InstantStealButton.MouseButton1Click:Connect(function()
     Settings.InstantSteal = not Settings.InstantSteal
-    InstantStealButton.TextColor3 = Settings.InstantSteal and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(180, 100, 255)
+    InstantStealButton.TextColor3 = Settings.InstantSteal and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
     InstantStealButton.Text = Settings.InstantSteal and "Instant steal (ON)" or "Instant steal (OFF)"
 end)
 
 SpeedButton.MouseButton1Click:Connect(function()
     Settings.Speed = not Settings.Speed
-    SpeedButton.TextColor3 = Settings.Speed and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(180, 100, 255)
+    SpeedButton.TextColor3 = Settings.Speed and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
     SpeedButton.Text = Settings.Speed and "Speed (On)" or "Speed (Off)"
 end)
 
 MapESPButton.MouseButton1Click:Connect(function()
     Settings.MapESP = not Settings.MapESP
-    MapESPButton.TextColor3 = Settings.MapESP and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(180, 100, 255)
+    MapESPButton.TextColor3 = Settings.MapESP and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
     MapESPButton.Text = Settings.MapESP and "Map ESP (ON)" or "Map ESP (OFF)"
 end)
 
 BaseESPButton.MouseButton1Click:Connect(function()
     Settings.BaseESP = not Settings.BaseESP
-    BaseESPButton.TextColor3 = Settings.BaseESP and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(180, 100, 255)
+    BaseESPButton.TextColor3 = Settings.BaseESP and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
     BaseESPButton.Text = Settings.BaseESP and "My Base ESP (ON)" or "My Base ESP (OFF)"
 end)
 
@@ -405,6 +383,6 @@ end)
 
 DisableAntiCheatDetection()
 
-print("✅ Steal A Brainrot Script v3.0 Loaded!")
-print("📌 Click ☰ button to toggle menu")
+print("✅ Steal A Brainrot Script v3.2 Loaded!")
+print("📌 Menu auto-show on left side!")
 print("🛡️ Anti-Cheat + Anti-TP Bypass Active!")
