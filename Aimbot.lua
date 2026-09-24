@@ -1,31 +1,16 @@
 --!strict
 --[[
-    Aim Assist + ESP Test Harness V7.2
+    Aim Assist + ESP Test Harness V7.3
     Roblox Studio / Own Experience Testing
     Roblox Studio APIs only
 
-    V7.2
-    • Persistent floating GUI open/close button
-    • RightShift menu toggle retained
-    • Compact ESP typography
-    • Distance-based ESP text scaling
-    • Shorter Name / Distance / Health text
-    • Thin Skeleton renderer for R6 + R15
-    • White Skeleton + dark outline
-    • White Tracer + dark outline
-    • Better ESP box contrast
-    • No temporary Model creation during ESP updates
-    • Reset Defaults refreshes GUI controls
-    • FIXED: Toggle buttons update ON/OFF immediately
-    • FIXED: Reset Defaults refreshes every toggle/cycle/slider
-    • AIM / ESP / SETTINGS / DEBUG retained
-    • Smoothness default 0.18
-    • PredictionTime default 0.12s
-    • Multi-point visibility
-    • Visibility grace / reacquisition
-    • Better tight-space targeting
-    • ESP wall check
-    • Proper player cleanup
+    V7.3
+    • V7.2 features retained
+    • Added Knife / Melee Backstab test system
+    • Weapon detection uses Tool Attribute: WeaponType = "Melee"
+    • Skin / mesh / Tool name does not matter
+    • Configurable melee range / back offset / smoothness
+    • Melee camera behavior takes priority over Aim Assist
 ]]
 
 local Players = game:GetService("Players")
@@ -66,6 +51,12 @@ local Config: {[string]: any} = {
     MultiPointVisibility = true,
     VisibilityGraceTime = 0.16,
     TargetSwitchDelay = 0.10,
+
+    -- Knife / Melee Backstab
+    KnifeBackstabEnabled = false,
+    KnifeRange = 8,
+    KnifeBackOffset = 2.5,
+    KnifeSmoothness = 0.25,
 
     ESPEnabled = true,
     ESPBox = true,
@@ -863,12 +854,162 @@ local function aimKeyHeld(): boolean
 end
 
 -- =========================================================
+-- KNIFE / MELEE DETECTION
+-- =========================================================
+
+local function getEquippedTool(): Tool?
+    local character =
+        characterOf(LocalPlayer)
+
+    if not character then
+        return nil
+    end
+
+    for _, child in ipairs(
+        character:GetChildren()
+    ) do
+
+        if child:IsA("Tool") then
+            return child
+        end
+    end
+
+    return nil
+end
+
+local function isMeleeEquipped(): boolean
+    local tool =
+        getEquippedTool()
+
+    if not tool then
+        return false
+    end
+
+    return tool:GetAttribute(
+        "WeaponType"
+    ) == "Melee"
+end
+
+local function findKnifeTarget(): Player?
+    local myCharacter =
+        characterOf(LocalPlayer)
+
+    if not myCharacter then
+        return nil
+    end
+
+    local myRoot =
+        rootOf(myCharacter)
+
+    if not myRoot then
+        return nil
+    end
+
+    local bestPlayer: Player? = nil
+    local bestDistance = math.huge
+
+    for _, player in ipairs(
+        Players:GetPlayers()
+    ) do
+
+        if player ~= LocalPlayer
+            and alive(player)
+            and teamAllowed(
+                player,
+                Config.TeamFilter
+            ) then
+
+            local character =
+                characterOf(player)
+
+            if character then
+
+                local targetRoot =
+                    rootOf(character)
+
+                if targetRoot then
+
+                    local distance =
+                        (
+                            targetRoot.Position
+                            - myRoot.Position
+                        ).Magnitude
+
+                    if distance
+                        <= Config.KnifeRange
+                        and distance
+                        < bestDistance then
+
+                        bestDistance =
+                            distance
+
+                        bestPlayer =
+                            player
+                    end
+                end
+            end
+        end
+    end
+
+    return bestPlayer
+end
+
+local function knifeBackstabAt(
+    player: Player
+)
+
+    if not Camera then
+        return
+    end
+
+    local character =
+        characterOf(player)
+
+    if not character then
+        return
+    end
+
+    local targetRoot =
+        rootOf(character)
+
+    if not targetRoot then
+        return
+    end
+
+    local backPosition =
+        targetRoot.Position
+        - (
+            targetRoot.CFrame.LookVector
+            * Config.KnifeBackOffset
+        )
+
+    local desired =
+        CFrame.lookAt(
+            Camera.CFrame.Position,
+            backPosition
+        )
+
+    local alpha =
+        math.clamp(
+            Config.KnifeSmoothness,
+            0.01,
+            1
+        )
+
+    Camera.CFrame =
+        Camera.CFrame:Lerp(
+            desired,
+            alpha
+        )
+end
+
+-- =========================================================
 -- GUI
 -- =========================================================
 
 local oldGui =
     PlayerGui:FindFirstChild(
-        "AimAssistESP_TestHarness_V72"
+        "AimAssistESP_TestHarness_V73"
     )
 
 if oldGui then
@@ -879,7 +1020,7 @@ local gui =
     Instance.new("ScreenGui")
 
 gui.Name =
-    "AimAssistESP_TestHarness_V72"
+    "AimAssistESP_TestHarness_V73"
 
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
@@ -993,7 +1134,7 @@ title.Position =
 title.BackgroundTransparency = 1
 
 title.Text =
-    "Aim Assist + ESP Test Harness V7.2"
+    "Aim Assist + ESP Test Harness V7.3"
 
 title.TextSize = 18
 
@@ -1168,6 +1309,9 @@ local aimPage =
 local espPage =
     makePage("ESP")
 
+local meleePage =
+    makePage("MELEE")
+
 local settingsPage =
     makePage("SETTINGS")
 
@@ -1194,9 +1338,13 @@ end
 local tabNames = {
     "AIM",
     "ESP",
+    "MELEE",
     "SETTINGS",
     "DEBUG",
 }
+
+local tabWidth = 112
+local tabGap = 8
 
 for index, name in ipairs(
     tabNames
@@ -1207,18 +1355,19 @@ for index, name in ipairs(
 
     button.Size =
         UDim2.fromOffset(
-            140,
+            tabWidth,
             32
         )
 
     button.Position =
         UDim2.fromOffset(
-            (index - 1) * 150,
+            (index - 1)
+                * (tabWidth + tabGap),
             0
         )
 
     button.Text = name
-    button.TextSize = 14
+    button.TextSize = 13
     button.Parent = tabs
 
     button.Activated:Connect(function()
@@ -1345,8 +1494,6 @@ local function toggleControl(
                         Config[key] == true
                     )
 
-                -- FIX:
-                -- Refresh immediately after clicking.
                 refresh()
             end
         )
@@ -1997,6 +2144,100 @@ makeLabel(
 )
 
 -- =========================================================
+-- MELEE PAGE
+-- =========================================================
+
+toggleControl(
+    meleePage,
+    "KnifeBackstabEnabled",
+    "Knife Backstab",
+    10,
+    5
+)
+
+sliderControl(
+    meleePage,
+    "KnifeRange",
+    "Range",
+    2,
+    20,
+    0.5,
+    10,
+    55
+)
+
+sliderControl(
+    meleePage,
+    "KnifeBackOffset",
+    "Back Offset",
+    0.5,
+    6,
+    0.1,
+    10,
+    127
+)
+
+sliderControl(
+    meleePage,
+    "KnifeSmoothness",
+    "Smoothness",
+    0.01,
+    1,
+    0.01,
+    10,
+    199
+)
+
+makeLabel(
+    meleePage,
+    "Requires Tool Attribute:",
+    320,
+    8
+)
+
+makeLabel(
+    meleePage,
+    'WeaponType = "Melee"',
+    320,
+    36
+)
+
+makeLabel(
+    meleePage,
+    "Tool name / skin / mesh",
+    320,
+    70
+)
+
+makeLabel(
+    meleePage,
+    "does not matter.",
+    320,
+    97
+)
+
+makeLabel(
+    meleePage,
+    "Closest enemy in range is selected.",
+    320,
+    140
+)
+
+makeLabel(
+    meleePage,
+    "Camera aims toward the target's back.",
+    320,
+    167
+)
+
+makeLabel(
+    meleePage,
+    "Unknown weapon types are ignored.",
+    320,
+    194
+)
+
+-- =========================================================
 -- SETTINGS PAGE
 -- =========================================================
 
@@ -2028,8 +2269,6 @@ buttonControl(
         targetState.lastVisibleAt = 0
         targetState.nextSwitchAt = 0
 
-        -- FIX:
-        -- Refresh every registered GUI control.
         for _, refresh in ipairs(
             refreshFunctions
         ) do
@@ -2241,8 +2480,6 @@ local espObjects:
 
 local skeletonJoints: {{string}} = {
 
-    -- R15
-
     {"Head", "UpperTorso"},
 
     {"UpperTorso", "LowerTorso"},
@@ -2262,8 +2499,6 @@ local skeletonJoints: {{string}} = {
     {"UpperTorso", "RightUpperArm"},
     {"RightUpperArm", "RightLowerArm"},
     {"RightLowerArm", "RightHand"},
-
-    -- R6
 
     {"Torso", "Head"},
     {"Torso", "Left Arm"},
@@ -2358,8 +2593,6 @@ local function setESPLine(
             )
         )
 
-    -- Dark outline
-
     line.outer.Position =
         UDim2.fromOffset(
             center.X,
@@ -2376,8 +2609,6 @@ local function setESPLine(
         rotation
 
     line.outer.Visible = true
-
-    -- White inner line
 
     line.inner.Position =
         UDim2.fromOffset(
@@ -2464,8 +2695,6 @@ local function createESP(
     eGui.DisplayOrder = 998
     eGui.Parent = gui
 
-    -- BOX
-
     local box =
         Instance.new("Frame")
 
@@ -2482,8 +2711,6 @@ local function createESP(
         ESP_MAIN_COLOR
 
     boxStroke.Parent = box
-
-    -- NAME
 
     local nameText =
         Instance.new("TextLabel")
@@ -2519,8 +2746,6 @@ local function createESP(
         nameStroke
     )
 
-    -- DISTANCE
-
     local distanceText =
         Instance.new("TextLabel")
 
@@ -2551,8 +2776,6 @@ local function createESP(
         distanceText,
         distanceStroke
     )
-
-    -- HEALTH
 
     local healthText =
         Instance.new("TextLabel")
@@ -2585,12 +2808,8 @@ local function createESP(
         healthStroke
     )
 
-    -- TRACER
-
     local tracer =
         createESPLine(eGui)
-
-    -- SKELETON
 
     local skeleton:
         {[string]: ESPLine} = {}
@@ -3019,9 +3238,6 @@ local function updateESP(
         return
     end
 
-    -- IMPORTANT:
-    -- Force the ESP wall check even if AIM visibility is disabled.
-
     if Config.ESPWallCheck then
 
         if not rayVisible(
@@ -3062,10 +3278,6 @@ local function updateESP(
             maxV.Y - minV.Y
         )
 
-    -- =====================================================
-    -- BOX
-    -- =====================================================
-
     bundle.box.Position =
         UDim2.fromOffset(
             minV.X,
@@ -3080,10 +3292,6 @@ local function updateESP(
 
     bundle.box.Visible =
         Config.ESPBox
-
-    -- =====================================================
-    -- COMPACT TEXT
-    -- =====================================================
 
     local textSize =
         getESPTextSize(
@@ -3105,10 +3313,6 @@ local function updateESP(
             textSize - 1
         )
 
-    -- =====================================================
-    -- NAME
-    -- =====================================================
-
     bundle.name.Position =
         UDim2.fromOffset(
             center.X,
@@ -3120,10 +3324,6 @@ local function updateESP(
 
     bundle.name.Visible =
         Config.ESPName
-
-    -- =====================================================
-    -- DISTANCE
-    -- =====================================================
 
     bundle.distance.Position =
         UDim2.fromOffset(
@@ -3139,10 +3339,6 @@ local function updateESP(
 
     bundle.distance.Visible =
         Config.ESPDistance
-
-    -- =====================================================
-    -- HEALTH
-    -- =====================================================
 
     if humanoid then
 
@@ -3169,10 +3365,6 @@ local function updateESP(
         bundle.health.Visible = false
     end
 
-    -- =====================================================
-    -- TRACER
-    -- =====================================================
-
     if Config.ESPTracer then
 
         local viewport =
@@ -3197,10 +3389,6 @@ local function updateESP(
             bundle.tracer
         )
     end
-
-    -- =====================================================
-    -- SKELETON
-    -- =====================================================
 
     updateSkeleton(
         bundle,
@@ -3276,9 +3464,6 @@ UserInputService.InputBegan:Connect(
                     Config.AimEnabled == true
                 )
 
-            -- Keep GUI state synchronized
-            -- when using E as the toggle key.
-
             for _, refresh in ipairs(
                 refreshFunctions
             ) do
@@ -3324,23 +3509,57 @@ RunService.RenderStepped:Connect(
         end
 
         -- =================================================
+        -- KNIFE / MELEE CAMERA
+        -- =================================================
+
+        local meleeActive =
+            Config.KnifeBackstabEnabled
+            and isMeleeEquipped()
+
+        local meleeTarget: Player? = nil
+
+        if meleeActive then
+
+            meleeTarget =
+                findKnifeTarget()
+
+            if meleeTarget then
+
+                knifeBackstabAt(
+                    meleeTarget
+                )
+            end
+        end
+
+        -- =================================================
         -- AIM
         -- =================================================
 
-        if Config.AimEnabled
-            and aimKeyHeld() then
+        -- Melee camera has priority so Aim Assist
+        -- does not fight it in the same frame.
 
-            local player, point =
-                updateTarget()
+        if not meleeTarget then
 
-            if player and point then
+            if Config.AimEnabled
+                and aimKeyHeld() then
 
-                aimAt(
-                    predictedPoint(
-                        point,
-                        player
+                local player, point =
+                    updateTarget()
+
+                if player and point then
+
+                    aimAt(
+                        predictedPoint(
+                            point,
+                            player
+                        )
                     )
-                )
+                end
+
+            else
+
+                targetState.player = nil
+                targetState.point = nil
             end
 
         else
@@ -3385,7 +3604,38 @@ RunService.RenderStepped:Connect(
                     "Debug: ON | Tab: "
                     .. currentTab
 
-                if targetState.player then
+                if meleeTarget then
+
+                    targetLabel.Text =
+                        "Melee Target: "
+                        .. meleeTarget.Name
+
+                    pointLabel.Text =
+                        "Knife Backstab: ACTIVE"
+
+                    local meleeDistance =
+                        distanceTo(
+                            meleeTarget
+                        )
+
+                    if meleeDistance then
+
+                        distanceLabel.Text =
+                            string.format(
+                                "Melee Distance: %.1f",
+                                meleeDistance
+                            )
+
+                    else
+
+                        distanceLabel.Text =
+                            "Melee Distance: --"
+                    end
+
+                    statusLabel.Text =
+                        "Status: melee lock"
+
+                elseif targetState.player then
 
                     targetLabel.Text =
                         "Target: "
