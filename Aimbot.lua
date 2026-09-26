@@ -42,12 +42,8 @@ local Config: {[string]: any} = {
     MaxPredictionOffset = 10,
     VisibilityCheck = true,
     MultiPointVisibility = true,
-    VisibilityGraceTime = 0.16,
+    VisibilityGraceTime = 0.00,
     TargetSwitchDelay = 0.10,
-    KnifeBackstabEnabled = false,
-    KnifeRange = 8,
-    KnifeBackOffset = 2.5,
-    KnifeSmoothness = 0.25,
     ESPEnabled = true,
     ESPBox = true,
     ESPName = true,
@@ -126,7 +122,7 @@ local function teamAllowed(player: Player, mode: string): boolean
 
     if mode == "Enemy" then
         if myTeam == nil or theirTeam == nil then
-            return true
+            return false
         end
         return theirTeam ~= myTeam
     end
@@ -288,63 +284,6 @@ local function selectionPoint(player: Player): (Vector3?, number)
     return nil, math.huge
 end
 
-local function aimPointForPlayer(player: Player): Vector3?
-    local character = characterOf(player)
-    if not character then return nil end
-
-    local part: BasePart? = nil
-    if Config.AimPart == "Head" then
-        part = headOf(character)
-    elseif Config.AimPart == "Body" then
-        part = bodyPartOf(character)
-    else
-        local head = headOf(character)
-        local body = bodyPartOf(character)
-        if head then
-            local hp = bestPointOnPart(character, head, false)
-            if hp then part = head end
-        end
-        if not part then part = body end
-    end
-
-    if not part then return nil end
-
-    local point = bestPointOnPart(character, part, false)
-    return point
-end
-
-local function bestAimPoint(player: Player): (Vector3?, BasePart?, number)
-    local character = characterOf(player)
-    if not character then return nil, nil, math.huge end
-
-    local head = headOf(character)
-    local body = bodyPartOf(character)
-
-    if Config.AimPart == "Head" then
-        local p, s = bestPointOnPart(character, head :: BasePart, false)
-        if p then return p, head, s end
-        return nil, head, math.huge
-    end
-
-    if Config.AimPart == "Body" then
-        local p, s = bestPointOnPart(character, body :: BasePart, false)
-        if p then return p, body, s end
-        return nil, body, math.huge
-    end
-
-    if head then
-        local hp, hs = bestPointOnPart(character, head, false)
-        if hp then return hp, head, hs end
-    end
-
-    if body then
-        local bp, bs = bestPointOnPart(character, body, false)
-        if bp then return bp, body, bs end
-    end
-
-    return nil, nil, math.huge
-end
-
 type TargetState = {
     player: Player?,
     point: Vector3?,
@@ -375,62 +314,55 @@ local function validTarget(player: Player): boolean
     return true
 end
 
-local function targetScore(player: Player): number
-    if Config.TargetPriority == "Closest" then
-        return distanceTo(player) or math.huge
-    end
-
-    if Config.TargetPriority == "Lowest Health" then
-        local character = characterOf(player)
-        local humanoid = character and humanoidOf(character)
-        return humanoid and humanoid.Health or math.huge
-    end
-
-    local point = selectionPoint(player)
-    if not point then return math.huge end
-    local score = screenDistance(point)
-    return score
-end
 
 local function findTarget(): (Player?, Vector3?)
     local bestPlayer: Player? = nil
+    local bestPoint: Vector3? = nil
     local bestScore = math.huge
 
     for _, player in ipairs(Players:GetPlayers()) do
         if validTarget(player) then
-            local selectionPointValue = selectionPoint(player)
-            if selectionPointValue then
-                local score = targetScore(player)
+            local point, crosshairScore = selectionPoint(player)
+            if point then
+                local score: number
+                if Config.TargetPriority == "Closest" then
+                    score = distanceTo(player) or math.huge
+                elseif Config.TargetPriority == "Lowest Health" then
+                    local character = characterOf(player)
+                    local humanoid = character and humanoidOf(character)
+                    score = humanoid and humanoid.Health or math.huge
+                else
+                    score = crosshairScore
+                end
                 if score < bestScore then
                     bestScore = score
                     bestPlayer = player
+                    bestPoint = point
                 end
             end
         end
     end
 
-    if bestPlayer then
-        return bestPlayer, aimPointForPlayer(bestPlayer)
-    end
-
-    return nil, nil
+    return bestPlayer, bestPoint
 end
 
 local function currentTargetStillGood(): (boolean, Vector3?)
     local player = targetState.player
-    if not player or not validTarget(player) then return false, nil end
+    if not player or not validTarget(player) then
+        targetState.point = nil
+        targetState.lastVisibleAt = 0
+        return false, nil
+    end
 
-    local point = aimPointForPlayer(player)
+    local point = selectionPoint(player)
     if point then
         targetState.lastVisibleAt = os.clock()
         targetState.point = point
         return true, point
     end
 
-    if targetState.point and (os.clock() - targetState.lastVisibleAt) <= Config.VisibilityGraceTime then
-        return true, targetState.point
-    end
-
+    targetState.point = nil
+    targetState.lastVisibleAt = 0
     return false, nil
 end
 
@@ -492,83 +424,14 @@ local function aimKeyHeld(): boolean
     return UserInputService:IsMouseButtonPressed(Config.AimKey)
 end
 
-local function getEquippedTool(): Tool?
-    local character = characterOf(LocalPlayer)
-    if not character then return nil end
-
-    for _, child in ipairs(character:GetChildren()) do
-        if child:IsA("Tool") then return child end
-    end
-
-    return nil
-end
-
-local function isMeleeEquipped(): boolean
-    local tool = getEquippedTool()
-    if not tool then return false end
-
-    local weaponType = tool:GetAttribute("WeaponType")
-    if typeof(weaponType) == "string" and string.lower(weaponType) == "melee" then return true end
-
-    local weaponClass = tool:GetAttribute("WeaponClass")
-    if typeof(weaponClass) == "string" and string.lower(weaponClass) == "melee" then return true end
-
-    local isMelee = tool:GetAttribute("IsMelee")
-    if isMelee == true then return true end
-
-    return false
-end
-
-local function findKnifeTarget(): Player?
-    local myCharacter = characterOf(LocalPlayer)
-    if not myCharacter then return nil end
-
-    local myRoot = rootOf(myCharacter)
-    if not myRoot then return nil end
-
-    local bestPlayer: Player? = nil
-    local bestDistance = math.huge
-
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and alive(player) and teamAllowed(player, Config.TeamFilter) then
-            local character = characterOf(player)
-            local targetRoot = character and rootOf(character)
-
-            if targetRoot then
-                local distance = (targetRoot.Position - myRoot.Position).Magnitude
-                if distance <= Config.KnifeRange and distance < bestDistance then
-                    bestDistance = distance
-                    bestPlayer = player
-                end
-            end
-        end
-    end
-
-    return bestPlayer
-end
-
-local function knifeBackstabAt(player: Player)
-    if not Camera then return end
-
-    local character = characterOf(player)
-    if not character then return end
-
-    local targetRoot = rootOf(character)
-    if not targetRoot then return end
-
-    local backPosition = targetRoot.Position - targetRoot.CFrame.LookVector * Config.KnifeBackOffset
-    local desired = CFrame.lookAt(Camera.CFrame.Position, backPosition)
-    Camera.CFrame = Camera.CFrame:Lerp(desired, math.clamp(Config.KnifeSmoothness, 0.01, 1))
-end
-
 -- GUI / ESP are retained from V7.4 below.
 -- The only behavioral changes are the targeting/team fixes above.
 
-local oldGui = PlayerGui:FindFirstChild("AimAssistESP_TestHarness_V73")
+local oldGui = PlayerGui:FindFirstChild("AimAssistESP_TestHarness_V75")
 if oldGui then oldGui:Destroy() end
 
 local gui = Instance.new("ScreenGui")
-gui.Name = "AimAssistESP_TestHarness_V73"
+gui.Name = "AimAssistESP_TestHarness_V75"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.DisplayOrder = 999
@@ -672,7 +535,6 @@ end
 
 local aimPage = makePage("AIM")
 local espPage = makePage("ESP")
-local meleePage = makePage("MELEE")
 local settingsPage = makePage("SETTINGS")
 local debugPage = makePage("DEBUG")
 local currentTab = "AIM"
@@ -682,7 +544,7 @@ local function showPage(name: string)
     for pageName, page in pairs(pages) do page.Visible = pageName == name end
 end
 
-for index, name in ipairs({"AIM", "ESP", "MELEE", "SETTINGS", "DEBUG"}) do
+for index, name in ipairs({"AIM", "ESP", "SETTINGS", "DEBUG"}) do
     local button = Instance.new("TextButton")
     button.Size = UDim2.fromOffset(112, 32)
     button.Position = UDim2.fromOffset((index - 1) * 120, 0)
@@ -877,19 +739,6 @@ sliderControl(espPage, "ESPMaxDistance", "Max Distance", 100, 2500, 10, 320, 47)
 sliderControl(espPage, "ESPTextScale", "Text Scale", 0.50, 1.00, 0.05, 320, 119)
 makeLabel(espPage, "Compact ESP • white + dark outline", 320, 175)
 makeLabel(espPage, "Smaller text reduces overlap", 320, 202)
-
-toggleControl(meleePage, "KnifeBackstabEnabled", "Knife Backstab", 10, 5)
-sliderControl(meleePage, "KnifeRange", "Range", 2, 20, 0.5, 10, 55)
-sliderControl(meleePage, "KnifeBackOffset", "Back Offset", 0.5, 6, 0.1, 10, 127)
-sliderControl(meleePage, "KnifeSmoothness", "Smoothness", 0.01, 1, 0.01, 10, 199)
-makeLabel(meleePage, "Requires Tool Attribute:", 320, 8)
-makeLabel(meleePage, 'WeaponType = "Melee"', 320, 36)
-makeLabel(meleePage, 'WeaponClass = "Melee"', 320, 70)
-makeLabel(meleePage, "or IsMelee = true", 320, 97)
-makeLabel(meleePage, "Tool name / skin / mesh", 320, 124)
-makeLabel(meleePage, "does not matter.", 320, 151)
-makeLabel(meleePage, "Closest enemy in range is selected.", 320, 194)
-makeLabel(meleePage, "Camera aims toward the target's back.", 320, 221)
 
 toggleControl(settingsPage, "FOVVisible", "FOV Circle", 10, 5)
 buttonControl(settingsPage, "Reset Defaults", 10, 42, function()
@@ -1292,22 +1141,10 @@ RunService.RenderStepped:Connect(function(dt)
         fovCircle.Visible = Config.FOVVisible
     end
 
-    local meleeActive = Config.KnifeBackstabEnabled and isMeleeEquipped()
-    local meleeTarget: Player? = nil
-
-    if meleeActive then
-        meleeTarget = findKnifeTarget()
-        if meleeTarget then knifeBackstabAt(meleeTarget) end
-    end
-
-    if not meleeTarget then
-        if Config.AimEnabled and aimKeyHeld() then
-            local player, point = updateTarget()
-            if player and point then
-                aimAt(predictedPoint(point, player))
-            end
-        else
-            resetTargetState()
+    if Config.AimEnabled and aimKeyHeld() then
+        local player, point = updateTarget()
+        if player and point then
+            aimAt(predictedPoint(point, player))
         end
     else
         resetTargetState()
@@ -1328,13 +1165,7 @@ RunService.RenderStepped:Connect(function(dt)
         if Config.Debug then
             debugLabel.Text = "Debug: ON | Tab: " .. currentTab .. " | AimPart: " .. tostring(Config.AimPart)
 
-            if meleeTarget then
-                targetLabel.Text = "Melee Target: " .. meleeTarget.Name
-                pointLabel.Text = "Knife Backstab: ACTIVE"
-                local meleeDistance = distanceTo(meleeTarget)
-                distanceLabel.Text = meleeDistance and string.format("Melee Distance: %.1f", meleeDistance) or "Melee Distance: --"
-                statusLabel.Text = "Status: melee lock"
-            elseif targetState.player then
+            if targetState.player then
                 targetLabel.Text = "Target: " .. targetState.player.Name
                 if targetState.point then
                     pointLabel.Text = string.format("Aim point: %.1f, %.1f, %.1f", targetState.point.X, targetState.point.Y, targetState.point.Z)
