@@ -1,6 +1,6 @@
 --!strict
 --[[
-    Aim Assist + ESP Test Harness V7.5
+    Aim Assist + ESP Test Harness V7.6
     Roblox Studio / Own Experience Testing
     Roblox Studio APIs only
 
@@ -10,10 +10,13 @@
     • Auto prefers Head, then Body fallback
     • Head mode never falls back to Body
     • Body mode never falls back to Head
-    • Same Team / Enemy / All filtering unified for Aim + ESP + Melee
+    • Same Team / Enemy / All filtering unified for Aim + ESP
     • Neutral/no-team handling is consistent
     • Target state resets when AimPart / TeamFilter changes
-    • Improved melee attribute detection
+    • Improved target stickiness and visibility handling
+    • Respawn-safe target state
+    • Bounded prediction and config validation
+    • Removed all Backstab / Melee functionality
 ]]
 
 local Players = game:GetService("Players")
@@ -42,8 +45,9 @@ local Config: {[string]: any} = {
     MaxPredictionOffset = 10,
     VisibilityCheck = true,
     MultiPointVisibility = true,
-    VisibilityGraceTime = 0.00,
     TargetSwitchDelay = 0.10,
+    TargetStickiness = 18,
+    VelocityPredictionMax = 100,
     ESPEnabled = true,
     ESPBox = true,
     ESPName = true,
@@ -110,7 +114,7 @@ local function alive(player: Player): boolean
 end
 
 -- Consistent team semantics:
--- Enemy = different non-nil Team; if either player has no Team, treat as allowed.
+-- Enemy = different non-nil Team only.
 -- Same Team = same Team, including both Neutral/no-Team.
 -- All = everyone except LocalPlayer.
 local function teamAllowed(player: Player, mode: string): boolean
@@ -186,15 +190,30 @@ local function rayVisible(targetCharacter: Model, origin: Vector3, targetPoint: 
     local currentOrigin = origin
     local remaining = direction
 
-    for _ = 1, 8 do
+    -- Walk through non-blocking / effectively invisible query hits, but stop
+    -- on an actual visible obstruction. This avoids false positives from
+    -- decorative non-collidable parts while still respecting real walls.
+    for _ = 1, 12 do
         local result = Workspace:Raycast(currentOrigin, remaining, params)
-        if not result then return true end
+        if not result then
+            return true
+        end
 
         local hit = result.Instance
-        if hit:IsA("BasePart") and not hit.CanCollide then
-            currentOrigin = result.Position + remaining.Unit * 0.02
+        if not hit:IsA("BasePart") then
+            return false
+        end
+
+        local transparent = hit.Transparency >= 0.95
+        local nonBlocking = not hit.CanCollide or not hit.CanQuery
+
+        if transparent or nonBlocking then
+            local unit = remaining.Unit
+            currentOrigin = result.Position + unit * 0.03
             remaining = targetPoint - currentOrigin
-            if remaining.Magnitude <= 0.02 then return true end
+            if remaining.Magnitude <= 0.03 then
+                return true
+            end
         else
             return false
         end
@@ -305,6 +324,23 @@ resetTargetState = function()
     targetState.nextSwitchAt = 0
 end
 
+LocalPlayer:GetPropertyChangedSignal("Team"):Connect(function()
+    resetTargetState()
+end)
+
+local function sanitizeConfig()
+    Config.FOV = math.clamp(tonumber(Config.FOV) or 55, 1, 2000)
+    Config.Smoothness = math.clamp(tonumber(Config.Smoothness) or 0.18, 0.01, 1)
+    Config.MaxDistance = math.max(1, tonumber(Config.MaxDistance) or 500)
+    Config.PredictionTime = math.clamp(tonumber(Config.PredictionTime) or 0.08, 0, 1)
+    Config.MaxPredictionOffset = math.max(0, tonumber(Config.MaxPredictionOffset) or 10)
+    Config.VelocityPredictionMax = math.max(1, tonumber(Config.VelocityPredictionMax) or 100)
+    Config.TargetSwitchDelay = math.max(0, tonumber(Config.TargetSwitchDelay) or 0.10)
+    Config.TargetStickiness = math.max(0, tonumber(Config.TargetStickiness) or 18)
+    Config.ESPMaxDistance = math.max(1, tonumber(Config.ESPMaxDistance) or 1000)
+    Config.ESPTextScale = math.clamp(tonumber(Config.ESPTextScale) or 0.8, 0.5, 1)
+end
+
 local function validTarget(player: Player): boolean
     if player == LocalPlayer or not alive(player) then return false end
     if not teamAllowed(player, Config.TeamFilter) then return false end
@@ -334,6 +370,16 @@ local function findTarget(): (Player?, Vector3?)
                 else
                     score = crosshairScore
                 end
+                -- When the current target is still a valid candidate, give it
+                -- a small score advantage so nearby targets do not cause jitter.
+                if player == targetState.player then
+                    if Config.TargetPriority == "Crosshair" then
+                        score -= math.min(Config.TargetStickiness, crosshairScore)
+                    else
+                        score -= Config.TargetStickiness
+                    end
+                end
+
                 if score < bestScore then
                     bestScore = score
                     bestPlayer = player
@@ -398,11 +444,19 @@ local function predictedPoint(point: Vector3, targetPlayer: Player): Vector3
     local root = character and rootOf(character)
     if not root then return point end
 
-    local offset = root.AssemblyLinearVelocity * Config.PredictionTime
-    local maxOffset = Config.MaxPredictionOffset
+    local velocity = root.AssemblyLinearVelocity
+    local maxVelocity = math.max(1, tonumber(Config.VelocityPredictionMax) or 100)
+    if velocity.Magnitude > maxVelocity then
+        velocity = velocity.Unit * maxVelocity
+    end
 
-    if offset.Magnitude > maxOffset then
+    local offset = velocity * math.max(0, tonumber(Config.PredictionTime) or 0)
+    local maxOffset = math.max(0, tonumber(Config.MaxPredictionOffset) or 10)
+
+    if offset.Magnitude > maxOffset and maxOffset > 0 then
         offset = offset.Unit * maxOffset
+    elseif maxOffset <= 0 then
+        offset = Vector3.zero
     end
 
     return point + offset
@@ -424,8 +478,7 @@ local function aimKeyHeld(): boolean
     return UserInputService:IsMouseButtonPressed(Config.AimKey)
 end
 
--- GUI / ESP are retained from V7.4 below.
--- The only behavioral changes are the targeting/team fixes above.
+-- GUI / ESP retained and hardened for Studio testing.
 
 local oldGui = PlayerGui:FindFirstChild("AimAssistESP_TestHarness_V75")
 if oldGui then oldGui:Destroy() end
@@ -473,7 +526,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -65, 0, 42)
 title.Position = UDim2.fromOffset(15, 4)
 title.BackgroundTransparency = 1
-title.Text = "Aim Assist + ESP Test Harness V7.5"
+title.Text = "Aim Assist + ESP Test Harness V7.6"
 title.TextSize = 18
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Parent = menu
@@ -611,6 +664,10 @@ local function cycleControl(parent: Instance, key: string, text: string, values:
             resetTargetState()
         end
 
+        if key == "ESPTeamFilter" then
+            -- ESP is recomputed on the next update tick; no target state change needed.
+        end
+
         refresh()
     end)
     table.insert(refreshFunctions, refresh)
@@ -723,7 +780,7 @@ sliderControl(aimPage, "FOV", "FOV", 40, 500, 1, 320, 5)
 sliderControl(aimPage, "Smoothness", "Smoothness", 0.01, 1, 0.01, 320, 77)
 sliderControl(aimPage, "PredictionTime", "Prediction Time", 0, 0.30, 0.01, 320, 149)
 sliderControl(aimPage, "MaxDistance", "Max Distance", 50, 2000, 10, 320, 221)
-sliderControl(aimPage, "VisibilityGraceTime", "Visibility Grace", 0, 0.50, 0.01, 320, 293)
+sliderControl(aimPage, "TargetStickiness", "Target Stickiness", 0, 100, 1, 320, 293)
 
 toggleControl(espPage, "ESPEnabled", "ESP Enabled", 10, 5)
 toggleControl(espPage, "ESPBox", "Box", 10, 42)
@@ -743,6 +800,7 @@ makeLabel(espPage, "Smaller text reduces overlap", 320, 202)
 toggleControl(settingsPage, "FOVVisible", "FOV Circle", 10, 5)
 buttonControl(settingsPage, "Reset Defaults", 10, 42, function()
     for key, value in pairs(DEFAULTS) do Config[key] = value end
+    sanitizeConfig()
     resetTargetState()
     for _, refresh in ipairs(refreshFunctions) do refresh() end
 end)
@@ -751,6 +809,8 @@ makeLabel(settingsPage, "E = aim on/off", 10, 125)
 makeLabel(settingsPage, "RMB = optional hold-to-aim", 10, 155)
 makeLabel(settingsPage, "Prediction uses velocity, not literal ping.", 10, 185)
 makeLabel(settingsPage, "☰ button = open/close GUI", 10, 215)
+makeLabel(settingsPage, "Target stickiness reduces rapid target switching.", 10, 245)
+makeLabel(settingsPage, "Wall check uses raycast + visible obstruction checks.", 10, 275)
 
 local debugLabel = makeLabel(debugPage, "Debug: OFF", 10, 5)
 local targetLabel = makeLabel(debugPage, "Target: none", 10, 38)
@@ -1102,6 +1162,40 @@ local function updateESP(player: Player)
     updateSkeleton(bundle, character, true)
 end
 
+local function bindPlayerLifecycle(player: Player)
+    if player == LocalPlayer then return end
+
+    player.CharacterAdded:Connect(function()
+        if targetState.player == player then
+            resetTargetState()
+        end
+
+        task.defer(function()
+            if player.Parent then
+                createESP(player)
+            end
+        end)
+    end)
+
+    player:GetPropertyChangedSignal("Team"):Connect(function()
+        if targetState.player == player then
+            resetTargetState()
+        end
+    end)
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+    bindPlayerLifecycle(player)
+end
+
+Players.PlayerAdded:Connect(function(player)
+    bindPlayerLifecycle(player)
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    resetTargetState()
+end)
+
 Players.PlayerRemoving:Connect(function(player)
     cleanupESP(player)
     if targetState.player == player then resetTargetState() end
@@ -1110,10 +1204,6 @@ end)
 for _, player in ipairs(Players:GetPlayers()) do
     if player ~= LocalPlayer then createESP(player) end
 end
-
-Players.PlayerAdded:Connect(function(player)
-    if player ~= LocalPlayer then createESP(player) end
-end)
 
 UserInputService.InputBegan:Connect(function(input, processed)
     if processed then return end
@@ -1135,6 +1225,8 @@ local espAccumulator = 0
 local debugAccumulator = 0
 
 RunService.RenderStepped:Connect(function(dt)
+    sanitizeConfig()
+
     if Camera then
         fovCircle.Position = UDim2.fromOffset(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
         fovCircle.Size = UDim2.fromOffset(Config.FOV * 2, Config.FOV * 2)
